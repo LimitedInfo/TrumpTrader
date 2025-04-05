@@ -159,47 +159,64 @@ def login_to_truth_social(driver):
         return False
 
 def scrape_first_tweet(driver):
-    """Scrapes the core text content of the first tweet using a specific XPath."""
+    """Scrapes the core text content of the first tweet using a specific XPath relative to the first item in the timeline."""
     tweet_text = None
     try:
         wait = WebDriverWait(driver, 20)
-        # This XPath identifies the container of the first tweet
-        first_tweet_container_xpath = "//*[@id=\"timeline\"]/div/div[2]/div[1]/div[1]/div"
-        print(f"Waiting for the first tweet container element with XPath: {first_tweet_container_xpath}")
-        
-        tweet_container_element = wait.until(EC.presence_of_element_located((By.XPATH, first_tweet_container_xpath)))
-        print("Tweet container element found.")
 
-        # --- Use the SPECIFIC relative XPath provided by the user --- 
-        specific_text_xpath_relative = ".//div/div[2]/div[1]/div/div/p/p" # Relative to the container
-        print(f"Attempting to find core text using specific relative XPath: {specific_text_xpath_relative}")
-        
+        # 1. Find the main timeline container
+        timeline_container_xpath = "//*[@id='timeline']/div/div[2]" # Corrected quotes
+        print(f"Waiting for the timeline container element with XPath: {timeline_container_xpath}")
+        timeline_container = wait.until(EC.presence_of_element_located((By.XPATH, timeline_container_xpath)))
+        print("Timeline container element found.")
+
+        # 2. Find the first tweet item within the container
+        #    Common patterns: first direct child `div` or any first child `*`
+        first_tweet_item = None
+        possible_first_item_selectors = ["./div[1]", "./*[1]"] # Try finding first div, then any first element
+        for selector in possible_first_item_selectors:
+             try:
+                 print(f"Attempting to find first tweet item using relative XPath: {selector}")
+                 first_tweet_item = timeline_container.find_element(By.XPATH, selector)
+                 print("First tweet item found.")
+                 break # Found it, exit loop
+             except NoSuchElementException:
+                 print(f"Could not find first item using {selector}. Trying next selector...")
+                 continue
+
+        if not first_tweet_item:
+            print("Error: Could not locate the first tweet item within the timeline container.")
+            return None # Can't proceed without the first item
+
+        # 3. Find the core text within the first tweet item using the specific relative XPath
+        specific_text_xpath_relative = ".//div/div[2]/div[1]/div/div/p/p"
+        print(f"Attempting to find core text within the first item using relative XPath: {specific_text_xpath_relative}")
+
         try:
-            text_element = tweet_container_element.find_element(By.XPATH, specific_text_xpath_relative)
+            text_element = first_tweet_item.find_element(By.XPATH, specific_text_xpath_relative)
             tweet_text = text_element.text.strip()
-            if tweet_text: 
+            if tweet_text:
                 print("Core tweet text found using specific XPath.")
             else:
-                print("Found specific element, but it contained no text.")
+                print("Found specific text element, but it contained no text.")
                 tweet_text = None # Explicitly set to None
         except NoSuchElementException:
-            print(f"Error: Element not found using specific relative XPath: {specific_text_xpath_relative}")
+            print(f"Error: Specific text element not found within the first tweet item using relative XPath: {specific_text_xpath_relative}")
             tweet_text = None # Ensure None if element not found
-        # -------------------------------------------------------------
 
         if tweet_text:
             print("\n--- First Tweet Core Text --- ")
             print(tweet_text)
-        # No fallback needed now as we have a specific target
 
     except TimeoutException:
-        print(f"Error: Timed out waiting for the tweet container element: {first_tweet_container_xpath}")
+        print(f"Error: Timed out waiting for the timeline container element: {timeline_container_xpath}")
     except NoSuchElementException:
-        print(f"Error: Could not find the tweet container element: {first_tweet_container_xpath}")
+        # This handles the case where the timeline container itself isn't found initially
+        print(f"Error: Could not find the timeline container element: {timeline_container_xpath}")
     except Exception as e:
         print(f"An error occurred while scraping the first tweet: {e}")
-        tweet_text = None
-    
+        # tweet_text is already None or set to None in inner try/except
+
     return tweet_text
 
 def scrape_page_info(driver):
