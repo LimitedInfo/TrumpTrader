@@ -15,6 +15,7 @@ import notifications
 # Import selenium-stealth
 from selenium_stealth import stealth
 import random # For random delays
+import stat # Import stat for permission constants
 
 load_dotenv()
 
@@ -75,6 +76,19 @@ def setup_driver():
         else:
             # Success: Use the explicitly constructed and verified path
             print(f"Using verified executable path: {expected_driver_path}")
+
+            # --- Set Execute Permissions (Linux/macOS fix) ---
+            if sys.platform != "win32": # Only necessary on non-Windows
+                try:
+                    print(f"Ensuring execute permissions for: {expected_driver_path}")
+                    st = os.stat(expected_driver_path)
+                    # Add execute permissions for user, group, and others (like chmod +x)
+                    os.chmod(expected_driver_path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                    print("Execute permissions set.")
+                except Exception as chmod_err:
+                    print(f"Warning: Failed to set execute permissions: {chmod_err}", file=sys.stderr)
+            # -----------------------------------------------
+
             service = ChromeService(executable_path=expected_driver_path)
 
         print("Initializing Chrome WebDriver with stealth...")
