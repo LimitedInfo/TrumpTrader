@@ -43,27 +43,38 @@ def setup_driver():
     try:
         # Use ChromeDriverManager and ChromeService
         print("Installing/Locating Chrome driver...")
-        # Get the directory path where the driver is installed
+        # Get the path (which might be to the notice file or directory)
         driver_install_path = ChromeDriverManager().install()
         print(f"Driver manager install path result: {driver_install_path}")
 
-        # Construct the expected path to the executable
-        # The install path might point to the directory or a file within it.
+        # Determine the directory containing the driver executable
         if os.path.isdir(driver_install_path):
             driver_dir = driver_install_path
         else:
+            # Assume install() gave a path *within* the correct directory
             driver_dir = os.path.dirname(driver_install_path)
+        print(f"Inferred driver directory: {driver_dir}")
+
+        # Determine the correct executable name based on OS
+        if sys.platform == "win32":
+            driver_executable_name = "chromedriver.exe"
+        else:
+            # Assume Linux/macOS
+            driver_executable_name = "chromedriver"
         
-        expected_driver_path = os.path.join(driver_dir, "chromedriver.exe")
+        # Construct the full path to the expected executable
+        expected_driver_path = os.path.join(driver_dir, driver_executable_name)
         print(f"Expecting driver executable at: {expected_driver_path}")
         
+        # Check if the constructed path is valid
         if not os.path.isfile(expected_driver_path):
-            print(f"Error: chromedriver.exe not found at the expected path: {expected_driver_path}", file=sys.stderr)
-            # Attempt to use the path directly from install() as a fallback, though it might fail
-            print("Falling back to using the direct path from ChromeDriverManager...")
-            service = ChromeService(driver_install_path) 
+            print(f"Error: {driver_executable_name} not found at the expected path: {expected_driver_path}", file=sys.stderr)
+            print("Falling back to using the direct path from ChromeDriverManager (might fail)...")
+            # Fallback: Use the potentially incorrect path from install() directly
+            service = ChromeService(executable_path=driver_install_path) 
         else:
-            # Use the explicitly constructed path to chromedriver.exe
+            # Success: Use the explicitly constructed and verified path
+            print(f"Using verified executable path: {expected_driver_path}")
             service = ChromeService(executable_path=expected_driver_path)
 
         print("Initializing Chrome WebDriver with stealth...")
