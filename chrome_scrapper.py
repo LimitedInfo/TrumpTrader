@@ -134,36 +134,48 @@ def login_to_truth_social(driver):
         return False
 
 def scrape_first_tweet(driver):
-    """Scrapes the text content of the first tweet using a specific XPath."""
-    tweet_text = None # Initialize tweet_text
+    """Scrapes the core text content of the first tweet using a specific XPath."""
+    tweet_text = None
     try:
-        # Wait for the specific tweet text element to be present
-        wait = WebDriverWait(driver, 20) 
-        first_tweet_text_xpath = "//*[@id=\"timeline\"]/div/div[2]/div[1]/div[1]/div" # Using the specific XPath provided
-        print(f"Waiting for the first tweet text element with XPath: {first_tweet_text_xpath}")
+        wait = WebDriverWait(driver, 20)
+        # This XPath identifies the container of the first tweet
+        first_tweet_container_xpath = "//*[@id=\"timeline\"]/div/div[2]/div[1]/div[1]/div"
+        print(f"Waiting for the first tweet container element with XPath: {first_tweet_container_xpath}")
         
-        # Find the element containing the tweet text directly
-        tweet_text_element = wait.until(EC.presence_of_element_located((By.XPATH, first_tweet_text_xpath)))
-        print("Tweet text element found.")
+        tweet_container_element = wait.until(EC.presence_of_element_located((By.XPATH, first_tweet_container_xpath)))
+        print("Tweet container element found.")
 
-        tweet_text = tweet_text_element.text.strip()
+        # --- Use the SPECIFIC relative XPath provided by the user --- 
+        specific_text_xpath_relative = ".//div/div[2]/div[1]/div/div/p/p" # Relative to the container
+        print(f"Attempting to find core text using specific relative XPath: {specific_text_xpath_relative}")
         
+        try:
+            text_element = tweet_container_element.find_element(By.XPATH, specific_text_xpath_relative)
+            tweet_text = text_element.text.strip()
+            if tweet_text: 
+                print("Core tweet text found using specific XPath.")
+            else:
+                print("Found specific element, but it contained no text.")
+                tweet_text = None # Explicitly set to None
+        except NoSuchElementException:
+            print(f"Error: Element not found using specific relative XPath: {specific_text_xpath_relative}")
+            tweet_text = None # Ensure None if element not found
+        # -------------------------------------------------------------
+
         if tweet_text:
-            print("\n--- First Tweet Text ---")
+            print("\n--- First Tweet Core Text --- ")
             print(tweet_text)
-        else:
-            print("\nFound the element, but it contains no text.")
-            tweet_text = None # Ensure it's None if empty
+        # No fallback needed now as we have a specific target
 
     except TimeoutException:
-        print(f"Error: Timed out waiting for the tweet text element with XPath: {first_tweet_text_xpath}")
+        print(f"Error: Timed out waiting for the tweet container element: {first_tweet_container_xpath}")
     except NoSuchElementException:
-        print(f"Error: Could not find the tweet text element using the specific XPath: {first_tweet_text_xpath}")
+        print(f"Error: Could not find the tweet container element: {first_tweet_container_xpath}")
     except Exception as e:
         print(f"An error occurred while scraping the first tweet: {e}")
-        tweet_text = None # Ensure it's None on error
+        tweet_text = None
     
-    return tweet_text # Return the scraped text (or None)
+    return tweet_text
 
 def scrape_page_info(driver):
     """Get basic information from the page"""
@@ -213,43 +225,91 @@ def main():
     print("Setting up the WebDriver...")
     driver = setup_driver()
     
+    # Set to store the text of tweets already seen
+    seen_tweets = set()
+    
     try:
         # Navigate to Truth Social
         print("Navigating to Truth Social...")
         driver.get("https://truthsocial.com")
         
-        # Wait for the page to load with random delay
-        print("Waiting for the page to load...")
-        random_delay(3, 6) # Initial random wait for page load
+        # Wait for the page to load
+        print("Waiting for the initial page to load...")
+        random_delay(3, 6)
         
         # Attempt Login
-        if login_to_truth_social(driver):
-            print("Login successful or process completed.")
-            # Scrape the first tweet after login
-            print("Attempting to scrape the first tweet...")
-            scraped_tweet_text = scrape_first_tweet(driver)
-            
-            # Send notification if text was scraped
-            if scraped_tweet_text:
-                print("Sending Pushover notification for the scraped tweet...")
-                notification_title = "New Truth Social Tweet Scraped"
-                notifications.send_pushover_notification(scraped_tweet_text, title=notification_title, priority=1)
-            else:
-                print("No tweet text scraped, skipping notification.")
-            
-            # Optionally scrape general page info after login
-            # print("Scraping info after login...")
-            # scrape_page_info(driver)
-        else:
-            print("Login failed or encountered an error.")
-            # Scrape info anyway if login failed?
-            # scrape_page_info(driver)
+        if not login_to_truth_social(driver):
+            print("Login failed. Exiting.")
+            return # Exit if login fails
         
-        # Pause to see the result
-        input("\nPress Enter to close the browser...")
+        print("\n--- Starting Tweet Monitoring Loop (Press Ctrl+C to stop) ---")
         
+        while True:
+            try:
+                print("\nChecking for new tweet...")
+                # Scrape the latest tweet
+                current_tweet_text = scrape_first_tweet(driver)
+                
+                # --- DEBUG PRINTS --- 
+                print(f"DEBUG: Scraped Text (raw): '{repr(current_tweet_text)}'") # Show raw text with quotes/escapes
+                print(f"DEBUG: Seen Tweets Set: {seen_tweets}") 
+                # --- END DEBUG PRINTS ---
+                
+                # Check if it's a new tweet
+                is_new = current_tweet_text and current_tweet_text not in seen_tweets
+                print(f"DEBUG: Is considered new? {is_new}") # Debug check result
+                
+                if is_new:
+                    print(f"*** New tweet found! ***")
+                    print("Sending Pushover notification...")
+                    notification_title = "New Truth Social Tweet Scraped"
+                    
+                    # Send notification
+                    success = notifications.send_pushover_notification(
+                        current_tweet_text, 
+                        title=notification_title, 
+                        priority=1
+                    )
+                    
+                    print(f"DEBUG: Notification success? {success}") # Debug notification result
+                    
+                    if success:
+                        # Add to seen tweets only if notification was successful
+                        seen_tweets.add(current_tweet_text)
+                        print("Notification sent and tweet marked as seen.")
+                    else:
+                        print("Failed to send notification for the new tweet.")
+                        
+                elif current_tweet_text:
+                    print("Tweet is not new.")
+                else:
+                    print("Could not scrape tweet text in this cycle.")
+
+                # Wait before refreshing
+                # refresh_interval_min = 60 # 1 minute
+                # refresh_interval_max = 120 # 2 minutes
+                refresh_interval_min = 15 # 15 seconds
+                refresh_interval_max = 30 # 30 seconds
+                print(f"\nWaiting for {refresh_interval_min}-{refresh_interval_max} seconds before refresh...")
+                random_delay(refresh_interval_min, refresh_interval_max)
+
+                # Refresh the page
+                print("Refreshing the page...")
+                driver.refresh()
+                print("Page refreshed. Waiting for content to load...")
+                random_delay(5, 10) # Wait a bit after refresh for elements to potentially load
+            
+            except KeyboardInterrupt:
+                print("\nCtrl+C detected. Exiting loop.")
+                break # Exit the while loop
+            except Exception as loop_error:
+                print(f"\nAn error occurred within the monitoring loop: {loop_error}")
+                print("Attempting to continue after a delay...")
+                random_delay(30, 60) # Wait longer after an error before retrying
+                # Consider adding logic here to try refreshing or re-logging in if errors persist
+
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"An critical error occurred: {e}")
     finally:
         # Close the browser
         if 'driver' in locals():
