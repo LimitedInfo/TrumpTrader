@@ -16,13 +16,21 @@ import notifications
 from selenium_stealth import stealth
 import random # For random delays
 import stat # Import stat for permission constants
+import json # Added import
 
 load_dotenv()
+
+SEEN_TWEETS_FILE = 'seen_tweets.json' # Define storage file path
+
+def print_status(message):
+    """Prints a status message to stderr."""
+    print(message, file=sys.stderr)
 
 def random_delay(min_seconds=1, max_seconds=4):
     """Introduce a random delay to mimic human behavior."""
     delay = random.uniform(min_seconds, max_seconds)
-    print(f"Waiting for {delay:.2f} seconds...")
+    # Use print_status for non-essential output
+    print_status(f"Waiting for {delay:.2f} seconds...")
     time.sleep(delay)
 
 def setup_driver():
@@ -43,10 +51,12 @@ def setup_driver():
 
     try:
         # Use ChromeDriverManager and ChromeService
-        print("Installing/Locating Chrome driver...")
+        # Use print_status
+        print_status("Installing/Locating Chrome driver...")
         # Get the path (which might be to the notice file or directory)
         driver_install_path = ChromeDriverManager().install()
-        print(f"Driver manager install path result: {driver_install_path}")
+        # Use print_status
+        print_status(f"Driver manager install path result: {driver_install_path}")
 
         # Determine the directory containing the driver executable
         if os.path.isdir(driver_install_path):
@@ -54,7 +64,8 @@ def setup_driver():
         else:
             # Assume install() gave a path *within* the correct directory
             driver_dir = os.path.dirname(driver_install_path)
-        print(f"Inferred driver directory: {driver_dir}")
+        # Use print_status
+        print_status(f"Inferred driver directory: {driver_dir}")
 
         # Determine the correct executable name based on OS
         if sys.platform == "win32":
@@ -65,33 +76,41 @@ def setup_driver():
         
         # Construct the full path to the expected executable
         expected_driver_path = os.path.join(driver_dir, driver_executable_name)
-        print(f"Expecting driver executable at: {expected_driver_path}")
+        # Use print_status
+        print_status(f"Expecting driver executable at: {expected_driver_path}")
         
         # Check if the constructed path is valid
         if not os.path.isfile(expected_driver_path):
-            print(f"Error: {driver_executable_name} not found at the expected path: {expected_driver_path}", file=sys.stderr)
-            print("Falling back to using the direct path from ChromeDriverManager (might fail)...")
+            # Use print_status for error
+            print_status(f"Error: {driver_executable_name} not found at the expected path: {expected_driver_path}")
+            # Use print_status for fallback message
+            print_status("Falling back to using the direct path from ChromeDriverManager (might fail)...")
             # Fallback: Use the potentially incorrect path from install() directly
             service = ChromeService(executable_path=driver_install_path) 
         else:
             # Success: Use the explicitly constructed and verified path
-            print(f"Using verified executable path: {expected_driver_path}")
+            # Use print_status
+            print_status(f"Using verified executable path: {expected_driver_path}")
 
             # --- Set Execute Permissions (Linux/macOS fix) ---
             if sys.platform != "win32": # Only necessary on non-Windows
                 try:
-                    print(f"Ensuring execute permissions for: {expected_driver_path}")
+                    # Use print_status
+                    print_status(f"Ensuring execute permissions for: {expected_driver_path}")
                     st = os.stat(expected_driver_path)
                     # Add execute permissions for user, group, and others (like chmod +x)
                     os.chmod(expected_driver_path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-                    print("Execute permissions set.")
+                    # Use print_status
+                    print_status("Execute permissions set.")
                 except Exception as chmod_err:
-                    print(f"Warning: Failed to set execute permissions: {chmod_err}", file=sys.stderr)
+                    # Use print_status for warning
+                    print_status(f"Warning: Failed to set execute permissions: {chmod_err}")
             # -----------------------------------------------
 
             service = ChromeService(executable_path=expected_driver_path)
 
-        print("Initializing Chrome WebDriver with stealth...")
+        # Use print_status
+        print_status("Initializing Chrome WebDriver with stealth...")
         driver = webdriver.Chrome(service=service, options=chrome_options)
 
         # Apply selenium-stealth patches
@@ -104,10 +123,12 @@ def setup_driver():
                 fix_hairline=True,
         )
 
-        print("WebDriver initialized and stealth applied.")
+        # Use print_status
+        print_status("WebDriver initialized and stealth applied.")
         return driver
     except Exception as e:
-        print(f"Error setting up WebDriver: {e}")
+        # Use print_status for error
+        print_status(f"Error setting up WebDriver: {e}")
         sys.exit(1)
 
 def login_to_truth_social(driver):
@@ -116,46 +137,57 @@ def login_to_truth_social(driver):
     password = os.getenv("TRUTH_SOCIAL_PASSWORD")
 
     if not username or not password:
-        print("Error: TRUTH_SOCIAL_USERNAME or TRUTH_SOCIAL_PASSWORD not found in .env file.")
+        # Use print_status for error
+        print_status("Error: TRUTH_SOCIAL_USERNAME or TRUTH_SOCIAL_PASSWORD not found in .env file.")
         return False
 
     try:
         wait = WebDriverWait(driver, 10)
 
         # Click the login button on the homepage
-        print("Clicking the main login button...")
+        # Use print_status
+        print_status("Clicking the main login button...")
         login_button_main = wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/div/div[1]/div/div[2]/div/div[1]/div[2]/button")))
         login_button_main.click()
-        print("Main login button clicked.")
+        # Use print_status
+        print_status("Main login button clicked.")
         random_delay(1, 2) # Random delay after click
 
         # Wait for the login modal to appear and elements to be ready
-        print("Waiting for login modal elements...")
+        # Use print_status
+        print_status("Waiting for login modal elements...")
         username_field = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@name='username']")))
         password_field = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@name='password']")))
         login_button_modal = wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/div/div[1]/div[2]/div/div/div/div[2]/form/div[2]/button[1]")))
-        print("Login modal elements located.")
+        # Use print_status
+        print_status("Login modal elements located.")
 
         # Enter credentials
-        print("Entering username...")
+        # Use print_status
+        print_status("Entering username...")
         username_field.send_keys(username)
         random_delay(0.5, 1.5) # Small delay after typing username
-        print("Entering password...")
+        # Use print_status
+        print_status("Entering password...")
         password_field.send_keys(password)
         random_delay(0.5, 1.5) # Small delay after typing password
         
         # Click the login button in the modal
-        print("Clicking the modal login button...")
+        # Use print_status
+        print_status("Clicking the modal login button...")
         login_button_modal.click()
-        print("Login attempted.")
+        # Use print_status
+        print_status("Login attempted.")
 
         # Wait a bit to see if login is successful (e.g., check for a specific element or URL change)
         random_delay(4, 7) # Longer random delay after login attempt
-        print("Login process complete.")
+        # Use print_status
+        print_status("Login process complete.")
         return True
 
     except Exception as e:
-        print(f"Error during login: {e}")
+        # Use print_status for error
+        print_status(f"Error during login: {e}")
         return False
 
 def scrape_first_tweet(driver):
@@ -166,9 +198,11 @@ def scrape_first_tweet(driver):
 
         # 1. Find the main timeline container
         timeline_container_xpath = "//*[@id='timeline']/div/div[2]" # Corrected quotes
-        print(f"Waiting for the timeline container element with XPath: {timeline_container_xpath}")
+        # Use print_status
+        print_status(f"Waiting for the timeline container element with XPath: {timeline_container_xpath}")
         timeline_container = wait.until(EC.presence_of_element_located((By.XPATH, timeline_container_xpath)))
-        print("Timeline container element found.")
+        # Use print_status
+        print_status("Timeline container element found.")
 
         # 2. Find the first tweet item within the container
         #    Common patterns: first direct child `div` or any first child `*`
@@ -176,48 +210,93 @@ def scrape_first_tweet(driver):
         possible_first_item_selectors = ["./div[1]", "./*[1]"] # Try finding first div, then any first element
         for selector in possible_first_item_selectors:
              try:
-                 print(f"Attempting to find first tweet item using relative XPath: {selector}")
+                 # Use print_status
+                 print_status(f"Attempting to find first tweet item using relative XPath: {selector}")
                  first_tweet_item = timeline_container.find_element(By.XPATH, selector)
-                 print("First tweet item found.")
+                 # Use print_status
+                 print_status("First tweet item found.")
                  break # Found it, exit loop
              except NoSuchElementException:
-                 print(f"Could not find first item using {selector}. Trying next selector...")
+                 # Use print_status
+                 print_status(f"Could not find first item using {selector}. Trying next selector...")
                  continue
 
         if not first_tweet_item:
-            print("Error: Could not locate the first tweet item within the timeline container.")
+            # Use print_status for error
+            print_status("Error: Could not locate the first tweet item within the timeline container.")
             return None # Can't proceed without the first item
 
         # 3. Find the core text within the first tweet item using the specific relative XPath
         specific_text_xpath_relative = ".//div/div[2]/div[1]/div/div/p/p"
-        print(f"Attempting to find core text within the first item using relative XPath: {specific_text_xpath_relative}")
+        # Use print_status
+        print_status(f"Attempting to find core text within the first item using relative XPath: {specific_text_xpath_relative}")
 
         try:
             text_element = first_tweet_item.find_element(By.XPATH, specific_text_xpath_relative)
             tweet_text = text_element.text.strip()
             if tweet_text:
-                print("Core tweet text found using specific XPath.")
+                # Use print_status
+                print_status("Core tweet text found using specific XPath.")
             else:
-                print("Found specific text element, but it contained no text.")
+                # Use print_status
+                print_status("Found specific text element, but it contained no text.")
                 tweet_text = None # Explicitly set to None
         except NoSuchElementException:
-            print(f"Error: Specific text element not found within the first tweet item using relative XPath: {specific_text_xpath_relative}")
+            # Use print_status for error
+            print_status(f"Error: Specific text element not found within the first tweet item using relative XPath: {specific_text_xpath_relative}")
             tweet_text = None # Ensure None if element not found
 
-        if tweet_text:
-            print("\n--- First Tweet Core Text --- ")
-            print(tweet_text)
+        # Remove this general print if only printing new tweets to stdout
+        # if tweet_text:
+        #     print("\n--- First Tweet Core Text --- ")
+        #     print(tweet_text)
 
     except TimeoutException:
-        print(f"Error: Timed out waiting for the timeline container element: {timeline_container_xpath}")
+        # Use print_status for error
+        print_status(f"Error: Timed out waiting for the timeline container element: {timeline_container_xpath}")
     except NoSuchElementException:
         # This handles the case where the timeline container itself isn't found initially
-        print(f"Error: Could not find the timeline container element: {timeline_container_xpath}")
+        # Use print_status for error
+        print_status(f"Error: Could not find the timeline container element: {timeline_container_xpath}")
     except Exception as e:
-        print(f"An error occurred while scraping the first tweet: {e}")
+        # Use print_status for error
+        print_status(f"An error occurred while scraping the first tweet: {e}")
         # tweet_text is already None or set to None in inner try/except
 
     return tweet_text
+
+def load_seen_tweets(filepath):
+    """Loads seen tweets from a JSON file."""
+    try:
+        if os.path.exists(filepath):
+            with open(filepath, 'r') as f:
+                # Use print_status
+                print_status(f"Loading seen tweets from {filepath}...")
+                data = json.load(f)
+                # Use print_status
+                print_status(f"Loaded {len(data)} tweets.")
+                return set(data) # Convert list back to set
+        else:
+            # Use print_status
+            print_status(f"Seen tweets file ({filepath}) not found. Starting with an empty set.")
+            return set()
+    except (IOError, json.JSONDecodeError) as e:
+        # Use print_status for error
+        print_status(f"Error loading seen tweets from {filepath}: {e}. Starting with an empty set.")
+        return set()
+
+def save_seen_tweets(tweets_set, filepath):
+    """Saves seen tweets to a JSON file."""
+    try:
+        with open(filepath, 'w') as f:
+            # Use print_status
+            print_status(f"Saving {len(tweets_set)} seen tweets to {filepath}...")
+            json.dump(list(tweets_set), f, indent=4) # Convert set to list for JSON
+            # Use print_status
+            print_status("Seen tweets saved.")
+    except IOError as e:
+        # Use print_status for error
+        print_status(f"Error saving seen tweets to {filepath}: {e}")
 
 def scrape_page_info(driver):
     """Get basic information from the page"""
@@ -264,98 +343,134 @@ def scrape_page_info(driver):
 
 def main():
     # Initialize the WebDriver
-    print("Setting up the WebDriver...")
+    # Use print_status
+    print_status("Setting up the WebDriver...")
     driver = setup_driver()
     
-    # Set to store the text of tweets already seen
-    seen_tweets = set()
+    # Load previously seen tweets from file
+    seen_tweets = load_seen_tweets(SEEN_TWEETS_FILE)
     
     try:
         # Navigate to Truth Social
-        print("Navigating to Truth Social...")
+        # Use print_status
+        print_status("Navigating to Truth Social...")
         driver.get("https://truthsocial.com")
         
         # Wait for the page to load
-        print("Waiting for the initial page to load...")
+        # Use print_status
+        print_status("Waiting for the initial page to load...")
         random_delay(3, 6)
         
         # Attempt Login
         if not login_to_truth_social(driver):
-            print("Login failed. Exiting.")
+            # Use print_status for error
+            print_status("Login failed. Exiting.")
             return # Exit if login fails
         
-        print("\n--- Starting Tweet Monitoring Loop (Press Ctrl+C to stop) ---")
+        # Use print_status
+        print_status("\n--- Starting Tweet Monitoring Loop (Press Ctrl+C to stop) ---")
         
         while True:
             try:
-                print("\nChecking for new tweet...")
+                # Use print_status
+                print_status("\nChecking for new tweet...")
                 # Scrape the latest tweet
                 current_tweet_text = scrape_first_tweet(driver)
                 
-                # --- DEBUG PRINTS --- 
-                print(f"DEBUG: Scraped Text (raw): '{repr(current_tweet_text)}'") # Show raw text with quotes/escapes
-                print(f"DEBUG: Seen Tweets Set: {seen_tweets}") 
+                # --- Keep DEBUG PRINTS to stderr if needed --- 
+                print_status(f"DEBUG: Scraped Text (raw): '{repr(current_tweet_text)}'")
+                print_status(f"DEBUG: Seen Tweets Set: {seen_tweets}") 
                 # --- END DEBUG PRINTS ---
                 
                 # Check if it's a new tweet
                 is_new = current_tweet_text and current_tweet_text not in seen_tweets
-                print(f"DEBUG: Is considered new? {is_new}") # Debug check result
+                print_status(f"DEBUG: Is considered new? {is_new}") # Debug check result
                 
                 if is_new:
-                    print(f"*** New tweet found! ***")
-                    print("Sending Pushover notification...")
+                    print_status(f"*** New tweet found! ***") # Prints to stderr
+
+                    # --- PRINT THE TWEET TEXT TO STDOUT FOR THE SERVICE ---
+                    print_status("DEBUG: About to print tweet to stdout...") # ADDED
+                    print(current_tweet_text, flush=True) # Should print to stdout
+                    print_status("DEBUG: Finished printing tweet to stdout.") # ADDED
+                    # --- ADD A UNIQUE DELIMITER AFTER THE TWEET TEXT ---
+                    print_status("DEBUG: About to print delimiter to stdout...") # ADDED
+                    print("---END_OF_TWEET_DELIMITER---", flush=True) # Should print to stdout
+                    print_status("DEBUG: Finished printing delimiter to stdout.") # ADDED
+                    # --- END PRINT TO STDOUT ---
+
+                    print_status("Sending Pushover notification...") # Prints to stderr
                     notification_title = "New Truth Social Tweet Scraped"
                     
-                    # Send notification
-                    success = notifications.send_pushover_notification(
-                        current_tweet_text, 
-                        title=notification_title, 
-                        priority=1
-                    )
-                    
-                    print(f"DEBUG: Notification success? {success}") # Debug notification result
-                    
-                    if success:
-                        # Add to seen tweets only if notification was successful
-                        seen_tweets.add(current_tweet_text)
-                        print("Notification sent and tweet marked as seen.")
-                    else:
-                        print("Failed to send notification for the new tweet.")
-                        
-                elif current_tweet_text:
-                    print("Tweet is not new.")
-                else:
-                    print("Could not scrape tweet text in this cycle.")
+                    # Add to seen tweets only if notification was successful
+                    seen_tweets.add(current_tweet_text)
+                    # Save the updated set to the file
+                    save_seen_tweets(seen_tweets, SEEN_TWEETS_FILE)
+                    return current_tweet_text
 
-                # Wait before refreshing
-                # refresh_interval_min = 60 # 1 minute
-                # refresh_interval_max = 120 # 2 minutes
+
+
+                elif current_tweet_text:
+                    # Use print_status
+                    print_status("Tweet is not new.")
+                else:
+                    # Use print_status
+                    print_status("Could not scrape tweet text in this cycle.")
+
+                # --- Active Wait and Element Check --- 
                 refresh_interval_min = 15 # 15 seconds
                 refresh_interval_max = 30 # 30 seconds
-                print(f"\nWaiting for {refresh_interval_min}-{refresh_interval_max} seconds before refresh...")
-                random_delay(refresh_interval_min, refresh_interval_max)
+                wait_duration = random.uniform(refresh_interval_min, refresh_interval_max)
+                start_time = time.time()
+                found_indicator = False
+                # Corrected XPath: Use * instead of // at the start if id is the first condition
+                new_tweet_indicator_xpath = "//*[@id='soapbox']/div[1]/div/div[2]/div[1]/div/div[2]/main/div/div/div[2]/div/div[4]/div[2]/div[1]/a"
+
+                print_status(f"\nActively waiting up to {wait_duration:.2f}s for new tweet indicator ({new_tweet_indicator_xpath}) or scheduled refresh...")
+
+                while time.time() - start_time < wait_duration:
+                    try:
+                        # Check if the indicator element exists
+                        indicator_elements = driver.find_elements(By.XPATH, new_tweet_indicator_xpath)
+                        if indicator_elements: # If list is not empty, element found
+                            print_status(f"*** New tweet indicator element found! Refreshing immediately. ***")
+                            found_indicator = True
+                            break # Exit the waiting loop to refresh now
+                    except Exception as check_err:
+                        # Log potential errors during check but continue waiting
+                        print_status(f"Warning: Error checking for indicator element: {check_err}")
+                    
+                    # Wait for a short interval before checking again
+                    time.sleep(1) # Check every 1 second
+                
+                if not found_indicator:
+                     print_status(f"Wait duration elapsed without finding indicator. Proceeding with scheduled refresh.")
+                # --- End Active Wait --- 
 
                 # Refresh the page
-                print("Refreshing the page...")
+                # Use print_status
+                print_status("Refreshing the page...")
                 driver.refresh()
-                print("Page refreshed. Waiting for content to load...")
-                random_delay(5, 10) # Wait a bit after refresh for elements to potentially load
             
             except KeyboardInterrupt:
-                print("\nCtrl+C detected. Exiting loop.")
+                # Use print_status
+                print_status("\nCtrl+C detected. Exiting loop.")
                 break # Exit the while loop
             except Exception as loop_error:
-                print(f"\nAn error occurred within the monitoring loop: {loop_error}")
-                print("Attempting to continue after a delay...")
+                # Use print_status for error
+                print_status(f"\nAn error occurred within the monitoring loop: {loop_error}")
+                print_status("Attempting to continue after a delay...")
                 random_delay(30, 60) # Wait longer after an error before retrying
                 # Consider adding logic here to try refreshing or re-logging in if errors persist
 
     except Exception as e:
-        print(f"An critical error occurred: {e}")
+        # Use print_status for critical error
+        print_status(f"An critical error occurred: {e}")
     finally:
         # Close the browser
         if 'driver' in locals():
-            print("Closing the browser...")
+            # Use print_status
+            print_status("Closing the browser...")
             driver.quit()
 
 if __name__ == "__main__":
