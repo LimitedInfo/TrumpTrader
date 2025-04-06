@@ -6,6 +6,9 @@ import sys  # Import sys for stderr
 
 load_dotenv()
 
+# Define the path to the mapping file
+TICKER_MAPPING_FILE = 'ticker_effected_mapping.json'
+
 class LLMRepository:
     def __init__(self):
         self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -13,6 +16,10 @@ class LLMRepository:
         self.REDIRECT_URI = os.getenv("REDIRECT_URI")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         
+        # Load the ticker mapping
+        self.ticker_mapping = self._load_ticker_mapping()
+        self.valid_countries = set(self.ticker_mapping.keys())
+
         # Authenticate and store both models
         self.gemini_flash_client, self.gemini_pro_client = self._authenticate_gemini_models()
 
@@ -33,6 +40,31 @@ class LLMRepository:
             "explanation": "[Concise reasoning connecting sentiment analysis to ticker/action choice]"
         }
         '''
+        # Define the desired JSON structure for the tariff firmness assessment
+        self._firmness_json_structure = '''
+        {
+            "firmness_direction": "[More Firm/Less Firm/Unchanged/Unclear]",
+            "confidence": "[High/Medium/Low]",
+            "reasoning": "[Brief explanation for the firmness assessment]"
+        }
+        '''
+
+    def _load_ticker_mapping(self):
+        """Loads the ticker mapping from the JSON file."""
+        try:
+            with open(TICKER_MAPPING_FILE, 'r') as f:
+                mapping = json.load(f)
+                print(f"Successfully loaded ticker mapping from {TICKER_MAPPING_FILE}")
+                return mapping
+        except FileNotFoundError:
+            print(f"Error: Ticker mapping file not found at {TICKER_MAPPING_FILE}", file=sys.stderr)
+            return {}
+        except json.JSONDecodeError:
+            print(f"Error: Failed to decode JSON from {TICKER_MAPPING_FILE}", file=sys.stderr)
+            return {}
+        except Exception as e:
+            print(f"An unexpected error occurred while loading {TICKER_MAPPING_FILE}: {e}", file=sys.stderr)
+            return {}
 
     def _authenticate_gemini_models(self):
         """Authenticates and initializes both Gemini models."""
@@ -152,14 +184,21 @@ class LLMRepository:
             print("Warning: Empty tweet text received for analysis.", file=sys.stderr)
             return None
 
+        # Get the list of valid countries/regions for the prompt
+        valid_country_list = ", ".join(f"'{c}'" for c in self.valid_countries)
+
         # Construct the detailed prompt using the class attribute structure
         full_prompt = f'''
         Analyze the following tweet from Donald Trump regarding its potential impact on United States tariffs. Your goal is to determine if the tweet suggests a change in the likelihood that current US tariffs will remain in place.
 
         Tweet Text: "{cleaned_text}"
 
+        Valid Countries/Regions: [{valid_country_list}]
+
+        Pick the most specific item you can, if a country is mentioned, that is the country you should choose, or about a region then return that region. If however it's just a general statement about tariffs, choose 'Whole World'.
+
         Instructions:
-        1. Identify the primary country or region mentioned or strongly implied in the tweet that relates to trade or tariffs. If no specific country/region is clear, use "N/A".
+        1. Identify the primary country or region mentioned or strongly implied in the tweet that relates to trade or tariffs. **Your answer MUST be one of the 'Valid Countries/Regions' listed above, or 'N/A' if no valid country/region is clearly identified.**
         2. Assess whether the tweet's content or tone suggests an INCREASED likelihood, DECREased likelihood, or UNCHANGED likelihood that US tariffs relevant to the identified country/region (or in general, if N/A) will remain in place. If the tweet is irrelevant or provides no clear signal, use "Unclear".
         3. Provide a brief reasoning for your assessment based *only* on the provided tweet text.
 
@@ -172,11 +211,19 @@ class LLMRepository:
 
         # Call the internal method to get the raw response string
         response_text = self._generate_raw_response(full_prompt, model_type='flash')
-        # Use the helper method for parsing
-        return self._parse_llm_json_response(response_text)
+        parsed_response = self._parse_llm_json_response(response_text)
+
+        # Add validation for country reference
+        if parsed_response and 'country_reference' in parsed_response:
+            country = parsed_response['country_reference']
+            if country != 'N/A' and country not in self.valid_countries:
+                print(f"Warning: LLM returned country '{country}' which is not in the valid list. Treating as N/A.", file=sys.stderr)
+                parsed_response['country_reference'] = 'N/A' # Overwrite if invalid
+
+        return parsed_response
 
     def analyze_tweet_reasoning(self, sentiment_analysis):
-        """Takes sentiment analysis results and suggests a relevant ticker/action."""
+        """Takes sentiment analysis results and suggests a ticker/action from the mapping."""
         # Input validation
         if not isinstance(sentiment_analysis, dict):
             print("Error: Input sentiment_analysis must be a dictionary.", file=sys.stderr)
@@ -186,56 +233,83 @@ class LLMRepository:
             print(f"Error: Input sentiment_analysis missing required keys ({required_keys}).", file=sys.stderr)
             return None
 
-        # Extract relevant info from the input
         country = sentiment_analysis.get("country_reference", "N/A")
         sentiment = sentiment_analysis.get("tariff_sentiment_change", "Unclear")
-        initial_reasoning = sentiment_analysis.get("reasoning", "")
+        initial_reasoning = sentiment_analysis.get("reasoning", "") # Keep for potential explanation
 
-        # Handle non-actionable sentiment directly
-        if sentiment in ["Unclear", "Unchanged"] or country == "N/A":
-            print(f"Info: Sentiment ({sentiment}) or country ({country}) is non-actionable. Returning N/A.", file=sys.stderr)
+        # Handle non-actionable sentiment or invalid country
+        if sentiment in ["Unclear", "Unchanged"] or country == "N/A" or country not in self.ticker_mapping:
+            explanation = "Sentiment analysis was unclear, unchanged, or country was N/A/invalid."
+            if country != "N/A" and country not in self.ticker_mapping:
+                explanation = f"Country '{country}' not found in ticker mapping."
+                print(f"Info: Country '{country}' from sentiment analysis not found in ticker_effected_mapping.json.", file=sys.stderr)
+            else:
+                print(f"Info: Sentiment ({sentiment}) or country ({country}) is non-actionable. Returning N/A.", file=sys.stderr)
+
             return {
                 "ticker": "N/A",
                 "action": "N/A",
-                "confidence": "N/A",
-                "explanation": "Sentiment analysis was unclear, unchanged, or lacked a specific country reference."
+                "confidence": "N/A", # Confidence is not applicable here
+                "explanation": explanation
             }
 
-        # Determine likely action based on sentiment (simplified)
-        # Increased likelihood of tariffs might hurt importers/benefit domestic producers
-        # Decreased likelihood might benefit importers/hurt domestic producers
-        # This is highly context-dependent and a simplification
-        potential_impact_direction = "positive for domestic/negative for importers" if sentiment == "Increased" else "negative for domestic/positive for importers"
+        # Lookup ticker and action from the mapping
+        mapping_entry = self.ticker_mapping.get(country)
 
-        # Construct the prompt for the reasoning/ticker analysis
+        if not mapping_entry or 'ticker' not in mapping_entry or 'action' not in mapping_entry:
+             print(f"Error: Invalid mapping entry for country '{country}' in {TICKER_MAPPING_FILE}.", file=sys.stderr)
+             return {
+                 "ticker": "N/A",
+                 "action": "N/A",
+                 "confidence": "N/A",
+                 "explanation": f"Invalid or incomplete mapping found for country '{country}'."
+             }
+
+        ticker = mapping_entry['ticker']
+        action = mapping_entry['action']
+
+        # Construct a simple explanation based on the lookup
+        explanation = f"Based on tariff sentiment '{sentiment}' for '{country}', mapped ticker is '{ticker}' with action '{action}'. Initial LLM reasoning: {initial_reasoning}"
+
+        print(f"Determined trade suggestion from mapping for '{country}': Ticker={ticker}, Action={action}")
+
+        # Return the result in the expected JSON structure
+        return {
+            "ticker": ticker,
+            "action": action,
+            "confidence": "Medium", # Set a default confidence level for mapping-based suggestions
+            "explanation": explanation
+        }
+
+    def analyze_tariff_firmness(self, tweet_text):
+        """Analyzes whether a tweet suggests Trump is becoming more or less firm on tariffs in general."""
+        cleaned_text = tweet_text.strip()
+        if not cleaned_text:
+            print("Warning: Empty tweet text received for firmness analysis.", file=sys.stderr)
+            return None
+
+        # Construct the prompt specifically for tariff firmness assessment
         full_prompt = f'''
-        Given the following analysis of a Donald Trump tweet regarding US tariffs:
-        - Country/Region Referenced: {country}
-        - Assessed Likelihood Change for Tariffs: {sentiment}
-        - Initial Reasoning: {initial_reasoning}
+        Analyze the following tweet from Donald Trump regarding his stance on tariffs in general. Your goal is to determine if the tweet suggests he is becoming MORE FIRM or LESS FIRM in his general position on tariffs.
 
-        Your Task:
-        1. Identify *one* highly relevant publicly traded stock ticker symbol (e.g., XOM, F, GOOG, BABA, TSLA, etc.) whose price might be significantly impacted (positively or negatively) by this tariff sentiment change towards the specified country/region.
-        2. Determine the likely trading action (BUY or SELL) for that ticker based *only* on the provided sentiment analysis. Consider if the sentiment change is likely to benefit (BUY) or harm (SELL) the company represented by the ticker.
-        3. Assess your confidence level (High, Medium, Low) in this ticker/action suggestion based *solely* on the provided analysis.
-        4. Provide a *very brief* explanation connecting the sentiment, country, and your ticker/action choice.
+        Tweet Text: "{cleaned_text}"
 
-        Base your analysis on the provided sentiment information and your knowledge of which companies are highly tied to the imports/exports of the country/region mentioned. If possible lean towards suggesting a BUY action. 
-
-        Constraint:
-        - Do not suggest a ticker that will potentially be hard to borrow.
-        - Do not suggest a ticker with low volume. 
-
-        Example Scenario: If sentiment is 'Increased' for 'China', you might suggest selling an importer heavily reliant on Chinese goods or buying a domestic competitor.
+        Instructions:
+        1. Determine if Trump's language and tone suggest he is becoming MORE FIRM (stronger, more committed) or LESS FIRM (softer, more flexible) on tariffs generally.
+        2. If the tweet doesn't clearly indicate a change in firmness, use "Unchanged".
+        3. If the tweet is unrelated to tariffs or provides no signal about tariff firmness, use "Unclear".
+        4. Provide your confidence level in this assessment.
+        5. Give a brief explanation of your reasoning based strictly on the tweet content.
 
         Output your analysis ONLY in the following JSON format. Do not include any text before or after the JSON block:
-        {self._reasoning_json_structure}
+        {self._firmness_json_structure}
         '''
 
-        print(f"Constructed prompt for LLM reasoning/ticker analysis.")
-        # print(f"Full prompt:\n{full_prompt}") # Optional: Debug prompt
-
-        # Call the LLM and parse the response using the helper
-        response_text = self._generate_raw_response(full_prompt, model_type='pro')
-        return self._parse_llm_json_response(response_text)
+        print("Constructed prompt for tariff firmness analysis.")
+        
+        # Call the flash model for faster response on this relatively straightforward task
+        response_text = self._generate_raw_response(full_prompt, model_type='flash')
+        parsed_response = self._parse_llm_json_response(response_text)
+        
+        return parsed_response
 

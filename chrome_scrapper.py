@@ -17,6 +17,8 @@ from selenium_stealth import stealth
 import random # For random delays
 import stat # Import stat for permission constants
 import json # Added import
+import threading # Added for timeout handling
+import signal # Added for timeout handling
 
 load_dotenv()
 
@@ -194,74 +196,63 @@ def scrape_first_tweet(driver):
     """Scrapes the core text content of the first tweet using a specific XPath relative to the first item in the timeline."""
     tweet_text = None
     try:
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 20) # Increased wait time slightly just in case
 
         # 1. Find the main timeline container
         timeline_container_xpath = "//*[@id='timeline']/div/div[2]" # Corrected quotes
-        # Use print_status
         print_status(f"Waiting for the timeline container element with XPath: {timeline_container_xpath}")
         timeline_container = wait.until(EC.presence_of_element_located((By.XPATH, timeline_container_xpath)))
-        # Use print_status
         print_status("Timeline container element found.")
+        random_delay(0.5, 1.5) # Small delay after finding container
 
         # 2. Find the first tweet item within the container
-        #    Common patterns: first direct child `div` or any first child `*`
         first_tweet_item = None
-        possible_first_item_selectors = ["./div[1]", "./*[1]"] # Try finding first div, then any first element
+        possible_first_item_selectors = ["./div[1]", "./*[1]"]
         for selector in possible_first_item_selectors:
              try:
-                 # Use print_status
                  print_status(f"Attempting to find first tweet item using relative XPath: {selector}")
+                 # Use the timeline_container as the context for finding the element
                  first_tweet_item = timeline_container.find_element(By.XPATH, selector)
-                 # Use print_status
                  print_status("First tweet item found.")
-                 break # Found it, exit loop
+                 break
              except NoSuchElementException:
-                 # Use print_status
                  print_status(f"Could not find first item using {selector}. Trying next selector...")
                  continue
 
         if not first_tweet_item:
-            # Use print_status for error
             print_status("Error: Could not locate the first tweet item within the timeline container.")
-            return None # Can't proceed without the first item
+            return None
 
-        # 3. Find the core text within the first tweet item using the specific relative XPath
+        # 3. Wait for and find the core text within the first tweet item
         specific_text_xpath_relative = ".//div/div[2]/div[1]/div/div/p/p"
-        # Use print_status
-        print_status(f"Attempting to find core text within the first item using relative XPath: {specific_text_xpath_relative}")
+        print_status(f"Waiting for core text within the first item using relative XPath: {specific_text_xpath_relative}")
 
         try:
-            text_element = first_tweet_item.find_element(By.XPATH, specific_text_xpath_relative)
+            # **** ADDED EXPLICIT WAIT for the text element relative to the first_tweet_item ****
+            text_element = WebDriverWait(first_tweet_item, 10).until(
+                EC.presence_of_element_located((By.XPATH, specific_text_xpath_relative))
+            )
+            # **********************************************************************************
+            
             tweet_text = text_element.text.strip()
             if tweet_text:
-                # Use print_status
                 print_status("Core tweet text found using specific XPath.")
             else:
-                # Use print_status
                 print_status("Found specific text element, but it contained no text.")
-                tweet_text = None # Explicitly set to None
-        except NoSuchElementException:
-            # Use print_status for error
+                tweet_text = None
+        except TimeoutException:
+            print_status(f"Error: Timed out waiting for specific text element within the first tweet item using relative XPath: {specific_text_xpath_relative}")
+            tweet_text = None
+        except NoSuchElementException: # Should be less likely now with the wait, but kept for safety
             print_status(f"Error: Specific text element not found within the first tweet item using relative XPath: {specific_text_xpath_relative}")
-            tweet_text = None # Ensure None if element not found
-
-        # Remove this general print if only printing new tweets to stdout
-        # if tweet_text:
-        #     print("\n--- First Tweet Core Text --- ")
-        #     print(tweet_text)
+            tweet_text = None
 
     except TimeoutException:
-        # Use print_status for error
         print_status(f"Error: Timed out waiting for the timeline container element: {timeline_container_xpath}")
     except NoSuchElementException:
-        # This handles the case where the timeline container itself isn't found initially
-        # Use print_status for error
         print_status(f"Error: Could not find the timeline container element: {timeline_container_xpath}")
     except Exception as e:
-        # Use print_status for error
         print_status(f"An error occurred while scraping the first tweet: {e}")
-        # tweet_text is already None or set to None in inner try/except
 
     return tweet_text
 
@@ -341,6 +332,22 @@ def scrape_page_info(driver):
     except Exception as e:
         print(f"Error while scraping page: {e}")
 
+def quit_driver_without_waiting(driver):
+    """Quit the driver in a separate thread without waiting at all."""
+    def quit_func():
+        try:
+            driver.quit()
+            print_status("Browser closed successfully.")
+        except Exception as e:
+            print_status(f"Error closing browser: {e}")
+    
+    # Create and start a thread for quitting
+    quit_thread = threading.Thread(target=quit_func)
+    quit_thread.daemon = True  # Set as daemon so it doesn't block program exit
+    quit_thread.start()
+    # Immediately return without waiting
+    print_status("Continuing program execution without waiting for browser to close...")
+
 def main():
     # Initialize the WebDriver
     # Use print_status
@@ -408,8 +415,6 @@ def main():
                     save_seen_tweets(seen_tweets, SEEN_TWEETS_FILE)
                     return current_tweet_text
 
-
-
                 elif current_tweet_text:
                     # Use print_status
                     print_status("Tweet is not new.")
@@ -447,11 +452,13 @@ def main():
                      print_status(f"Wait duration elapsed without finding indicator. Proceeding with scheduled refresh.")
                 # --- End Active Wait --- 
 
-                # Refresh the page
-                # Use print_status
                 print_status("Refreshing the page...")
                 driver.refresh()
-            
+                # **** ADDED DELAY AFTER REFRESH ****
+                print_status("Waiting after refresh for page to load...")
+                random_delay(1, 2) # Give it a few seconds to reload content post-refresh
+                # ***********************************
+
             except KeyboardInterrupt:
                 # Use print_status
                 print_status("\nCtrl+C detected. Exiting loop.")
@@ -471,7 +478,8 @@ def main():
         if 'driver' in locals():
             # Use print_status
             print_status("Closing the browser...")
-            driver.quit()
+            # Replace driver.quit() with non-blocking version
+            quit_driver_without_waiting(driver)
 
 if __name__ == "__main__":
     main() 

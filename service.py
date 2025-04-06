@@ -81,32 +81,49 @@ async def main():
             return
         print(f"Fetched tweet via direct call: {tweet_text[:100]}...")
 
-        sentiment_result = send_to_llm(tweet_text)
-        if not sentiment_result:
-            print("Failed to analyze sentiment. Exiting.", file=sys.stderr)
-            return
-        print(f"Sentiment analysis result: {sentiment_result}")
+        tariff_firmness_result = llm_repo.analyze_tariff_firmness(tweet_text)
+        print(f"Tariff firmness result: {tariff_firmness_result}")
+
+        if tariff_firmness_result['firmness_direction'] == 'More Firm':
+            action = 'SELL'
+        elif tariff_firmness_result['firmness_direction'] == 'Less Firm':
+            action = 'BUY'
+        else:
+            action = 'N/A'
+
+
+        # sentiment_result = send_to_llm(tweet_text)
+        # if not sentiment_result:
+        #     print("Failed to analyze sentiment. Exiting.", file=sys.stderr)
+        #     return
+        # print(f"Sentiment analysis result: {sentiment_result}")
 
         
 
-        suggestion = get_trade_suggestion(sentiment_result)
-        if not suggestion:
-            print("Failed to get trade suggestion. Exiting.", file=sys.stderr)
-            return
-        print(f"Trade suggestion: {suggestion}")
-    
-        if suggestion.get('ticker') and suggestion.get('action') == 'SELL':
-            quote = await schwab.get_quote(schwab_client, suggestion.get('ticker'))
-            if quote['isHardToBorrow']:
-                print(f"Ticker {suggestion.get('ticker')} is hard to borrow. Skipping SELL.", file=sys.stderr)
-                return
-            
+        # suggestion = get_trade_suggestion(sentiment_result)
+        # if not suggestion:
+        #     print("Failed to get trade suggestion. Exiting.", file=sys.stderr)
+        #     return
+        # print(f"Trade suggestion: {suggestion}")
+
+        # print(f"Tariff sentiment change: {sentiment_result['tariff_sentiment_change']}")
+        # # Increased/Decreased/Unchanged/Unclear
+        # if sentiment_result['tariff_sentiment_change'] == 'Increased':
+        #     action = suggestion.get('action')
+        # elif sentiment_result['tariff_sentiment_change'] == 'Decreased':
+        #     if suggestion.get('action') == 'SELL':
+        #         action = 'BUY'
+        #     elif suggestion.get('action') == 'BUY':
+        #         action = 'SELL'
+        # elif sentiment_result['tariff_sentiment_change'] == 'Unchanged':
+        #     action = 'N/A'
+        # elif sentiment_result['tariff_sentiment_change'] == 'Unclear':
+        #     action = 'N/A'
 
         # 4. Execute trade if schwab is available and initialized
         if SCHWAB_AVAILABLE and schwab_client and account_hash:
             print("Schwab is available. Attempting to execute trade...")
-            action = suggestion.get('action')
-            ticker = suggestion.get('ticker')
+            ticker = 'SPY'
 
             if action and ticker and action != 'N/A' and ticker != 'N/A':
                 if action.upper() == 'BUY':
@@ -129,7 +146,6 @@ async def main():
                 elif action.upper() == 'SELL':
                     print(f"SELL action suggested for {ticker}. SELL execution is not implemented in this service as quantity is not provided by the LLM.", file=sys.stderr)
                     # Example: If quantity were available, the call would be:
-                    quantity_to_sell = suggestion.get('quantity') # Hypothetical
                     sell_order_id = await schwab.execute_sell_trade(schwab_client, account_hash, ticker, dollar_amount)
                 else:
                     print(f"Unknown action '{action}' in suggestion. No trade executed.", file=sys.stderr)
@@ -141,7 +157,7 @@ async def main():
         # Send pushover notification
         success = notifications.send_pushover_notification(
             tweet_text, 
-            title=f"{suggestion.get('explanation')}", 
+            title=f"{tariff_firmness_result['reasoning']}", 
             priority=1
         )
         
