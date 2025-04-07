@@ -6,6 +6,13 @@ from repository import LLMRepository
 # Default dollar amount for BUY orders
 dollar_amount = 1000.0
 
+# Get dollar_amount from command line if provided as second argument
+if len(sys.argv) > 2:
+    try:
+        dollar_amount = float(sys.argv[2])
+    except ValueError:
+        print(f"Warning: Invalid dollar amount '{sys.argv[2]}'. Using default ${dollar_amount}.", file=sys.stderr)
+
 # Assume schwab.py and chrome_scrapper.py exist and have needed functions
 try:
     import schwab
@@ -52,127 +59,107 @@ def get_trade_suggestion(sentiment_result):
         return None
 
 async def main():
-    print("Starting async main process (using direct chrome_scrapper call)...")
-    schwab_client = None
-    account_hash = None
+    while True:
+        print("Starting async main process (using direct chrome_scrapper call)...")
+        schwab_client = None
+        account_hash = None
 
-    # Check if chrome_scrapper was imported successfully
-    if not chrome_scrapper:
-        print("chrome_scrapper module not found, cannot fetch tweet. Exiting.", file=sys.stderr)
-        return
-
-    # Initialize Schwab client and get account hash if available
-    if SCHWAB_AVAILABLE:
-        try:
-            schwab_client = schwab.initialize_client()
-            await asyncio.sleep(0.1) # Small yield
-            account_hash = await schwab.get_primary_account_hash(schwab_client)
-            await asyncio.sleep(0.1) # Small yield
-            if not account_hash:
-                 print("Failed to get Schwab account hash. Trading will be skipped.", file=sys.stderr)
-        except Exception as e:
-            print(f"Error initializing Schwab or getting account hash: {e}", file=sys.stderr)
-
-    try:
-        tweet_text = chrome_scrapper.main()
-
-        if not tweet_text:
-            print("chrome_scrapper.main() did not return tweet text. Exiting.", file=sys.stderr)
+        # Check if chrome_scrapper was imported successfully
+        if not chrome_scrapper:
+            print("chrome_scrapper module not found, cannot fetch tweet. Exiting.", file=sys.stderr)
             return
-        print(f"Fetched tweet via direct call: {tweet_text[:100]}...")
 
-        tariff_firmness_result = llm_repo.analyze_tariff_firmness(tweet_text)
-        print(f"Tariff firmness result: {tariff_firmness_result}")
+        # Initialize Schwab client and get account hash if available
+        if SCHWAB_AVAILABLE:
+            try:
+                schwab_client = schwab.initialize_client()
+                await asyncio.sleep(0.1) # Small yield
+                account_hash = await schwab.get_primary_account_hash(schwab_client)
+                await asyncio.sleep(0.1) # Small yield
+                if not account_hash:
+                    print("Failed to get Schwab account hash. Trading will be skipped.", file=sys.stderr)
+            except Exception as e:
+                print(f"Error initializing Schwab or getting account hash: {e}", file=sys.stderr)
 
-        if tariff_firmness_result['firmness_direction'] == 'More Firm':
-            action = 'SELL'
-        elif tariff_firmness_result['firmness_direction'] == 'Less Firm':
-            action = 'BUY'
-        else:
-            action = 'N/A'
+        try:
+            tweet_text = chrome_scrapper.main()
 
+            if not tweet_text:
+                print("chrome_scrapper.main() did not return tweet text. Exiting.", file=sys.stderr)
+                return
+            print(f"Fetched tweet via direct call: {tweet_text[:100]}...")
 
-        # sentiment_result = send_to_llm(tweet_text)
-        # if not sentiment_result:
-        #     print("Failed to analyze sentiment. Exiting.", file=sys.stderr)
-        #     return
-        # print(f"Sentiment analysis result: {sentiment_result}")
+            tariff_firmness_result = llm_repo.analyze_tariff_firmness(tweet_text)
+            print(f"Tariff firmness result: {tariff_firmness_result}")
 
-        
-
-        # suggestion = get_trade_suggestion(sentiment_result)
-        # if not suggestion:
-        #     print("Failed to get trade suggestion. Exiting.", file=sys.stderr)
-        #     return
-        # print(f"Trade suggestion: {suggestion}")
-
-        # print(f"Tariff sentiment change: {sentiment_result['tariff_sentiment_change']}")
-        # # Increased/Decreased/Unchanged/Unclear
-        # if sentiment_result['tariff_sentiment_change'] == 'Increased':
-        #     action = suggestion.get('action')
-        # elif sentiment_result['tariff_sentiment_change'] == 'Decreased':
-        #     if suggestion.get('action') == 'SELL':
-        #         action = 'BUY'
-        #     elif suggestion.get('action') == 'BUY':
-        #         action = 'SELL'
-        # elif sentiment_result['tariff_sentiment_change'] == 'Unchanged':
-        #     action = 'N/A'
-        # elif sentiment_result['tariff_sentiment_change'] == 'Unclear':
-        #     action = 'N/A'
-
-        # 4. Execute trade if schwab is available and initialized
-        if SCHWAB_AVAILABLE and schwab_client and account_hash:
-            print("Schwab is available. Attempting to execute trade...")
-            ticker = 'SPY'
-
-            if action and ticker and action != 'N/A' and ticker != 'N/A':
-                if action.upper() == 'BUY':
-                    print(f"Executing BUY trade for {ticker} with ${dollar_amount}...")
-                    try:
-                        buy_order_id, calculated_quantity = await schwab.execute_schwab_trade(
-                            schwab_client,
-                            account_hash,
-                            ticker,
-                            dollar_amount,
-                            "BUY"
-                        )
-                        if buy_order_id:
-                             print(f"BUY trade for {ticker} submitted. Order ID: {buy_order_id}, Calc Quantity: {calculated_quantity}")
-                        else:
-                             print(f"BUY trade submission failed for {ticker}. Check logs.", file=sys.stderr)
-                    except Exception as trade_err:
-                        print(f"Error during BUY trade execution for {ticker}: {trade_err}", file=sys.stderr)
-
-                elif action.upper() == 'SELL':
-                    print(f"SELL action suggested for {ticker}. SELL execution is not implemented in this service as quantity is not provided by the LLM.", file=sys.stderr)
-                    # Example: If quantity were available, the call would be:
-                    sell_order_id = await schwab.execute_sell_trade(schwab_client, account_hash, ticker, dollar_amount)
-                else:
-                    print(f"Unknown action '{action}' in suggestion. No trade executed.", file=sys.stderr)
+            if tariff_firmness_result['firmness_direction'] == 'More Firm':
+                action = 'SELL'
+            elif tariff_firmness_result['firmness_direction'] == 'Less Firm':
+                action = 'BUY'
             else:
-                print(f"Invalid or N/A suggestion (Action: {action}, Ticker: {ticker}). No trade executed.")
-        else:
-            print("Schwab is not available, not initialized, or account hash missing. Skipping trade execution.")
+                action = 'N/A'
 
-        # Send pushover notification
-        success = notifications.send_pushover_notification(
-            tweet_text, 
-            title=f"{tariff_firmness_result['reasoning']}", 
-            priority=1
-        )
-        
+            if tariff_firmness_result['confidence'] == 'High':
+                adjusted_dollar_amount = dollar_amount * 2
+            elif tariff_firmness_result['confidence'] == 'Medium':
+                adjusted_dollar_amount = dollar_amount * 1
+            elif tariff_firmness_result['confidence'] == 'Low':
+                adjusted_dollar_amount = dollar_amount * 0.2
 
-    # Add specific handling for potential errors from chrome_scrapper.main()
-    except AttributeError as ae:
-         if "'NoneType' object has no attribute 'main'" in str(ae):
-             print("Error: chrome_scrapper could not be imported correctly.", file=sys.stderr)
-         else:
-             print(f"An unexpected AttributeError occurred: {ae}", file=sys.stderr)
-    except Exception as e:
-        # General error catching for the main logic block
-        print(f"An error occurred in the main async process: {e}", file=sys.stderr)
+            # 4. Execute trade if schwab is available and initialized
+            if SCHWAB_AVAILABLE and schwab_client and account_hash:
+                print("Schwab is available. Attempting to execute trade...")
+                # Use command-line argument for ticker if provided, otherwise default to 'SPY'
+                ticker = sys.argv[1].upper() if len(sys.argv) > 1 else 'SPY'
 
-    print("Async main process finished.")
+                if action and ticker and action != 'N/A' and ticker != 'N/A':
+                    if action.upper() == 'BUY':
+                        print(f"Executing BUY trade for {ticker} with ${dollar_amount}...")
+                        try:
+                            buy_order_id, calculated_quantity = await schwab.execute_schwab_trade(
+                                schwab_client,
+                                account_hash,
+                                ticker,
+                                adjusted_dollar_amount,
+                                "BUY"
+                            )
+                            if buy_order_id:
+                                print(f"BUY trade for {ticker} submitted. Order ID: {buy_order_id}, Calc Quantity: {calculated_quantity}")
+                            else:
+                                print(f"BUY trade submission failed for {ticker}. Check logs.", file=sys.stderr)
+                        except Exception as trade_err:
+                            print(f"Error during BUY trade execution for {ticker}: {trade_err}", file=sys.stderr)
+
+                    elif action.upper() == 'SELL':
+                        print(f"SELL action suggested for {ticker}. SELL execution is not implemented in this service as quantity is not provided by the LLM.", file=sys.stderr)
+                        # Example: If quantity were available, the call would be:
+                        sell_order_id = await schwab.execute_sell_trade(schwab_client, account_hash, ticker, dollar_amount)
+                    else:
+                        print(f"Unknown action '{action}' in suggestion. No trade executed.", file=sys.stderr)
+                else:
+                    print(f"Invalid or N/A suggestion (Action: {action}, Ticker: {ticker}). No trade executed.")
+            else:
+                print("Schwab is not available, not initialized, or account hash missing. Skipping trade execution.")
+
+            # Send pushover notification
+            success = notifications.send_pushover_notification(
+                tweet_text, 
+                title=f"{tariff_firmness_result['reasoning']}", 
+                priority=1
+            )
+            
+
+        # Add specific handling for potential errors from chrome_scrapper.main()
+        except AttributeError as ae:
+            if "'NoneType' object has no attribute 'main'" in str(ae):
+                print("Error: chrome_scrapper could not be imported correctly.", file=sys.stderr)
+            else:
+                print(f"An unexpected AttributeError occurred: {ae}", file=sys.stderr)
+        except Exception as e:
+            # General error catching for the main logic block
+            print(f"An error occurred in the main async process: {e}", file=sys.stderr)
+
+        print("Async main process finished.")
 
 if __name__ == "__main__":
     # Still run the async main function using asyncio.run
